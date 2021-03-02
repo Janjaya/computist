@@ -6,23 +6,23 @@ import os
 
 class Module(BaseModule):
     meta = {
-        'name': 'Lemmatisation',
-        'author': 'Jan William Johnsen (@frozenbeer)',
-        'version': '1.0',
-        'description': 'Lemmatise specified column(s).',
-        'files': [],
-        'options': (
-            ('column', '', True, 'column(s) to lemmatise, separate with comma'),
+        "name": "Lemmatisation",
+        "author": "Jan William Johnsen (@frozenbeer)",
+        "version": "1.0",
+        "description": "Lemmatise specified column(s).",
+        "options": (
+            ("column", "", True, "column(s) to lemmatise, separate with comma"),
+            # TODO: Manually add extra stopwords to remove.
         ),
     }
 
     def module_run(self):
-        df_stopwords = pd.read_json(os.path.join(self.data_path, 'stopwords', 'stopwords.json'))
-        stopwords = df_stopwords['word'].to_list()
+        df_stopwords = pd.read_json(os.path.join(self.data_path, "stopwords", "stopwords.json"))
+        stopwords = df_stopwords["word"].to_list()
         columns = []
-        if ',' in self.options['column']:
-            columns = self.options['column'].replace(' ', '').split(',')
+        if "," in self.options["column"]:
+            columns = self.options["column"].replace(" ", "").split(",")
         else:
-            columns = [self.options['column']]
+            columns = [self.options["column"]]
         for column in columns:
             self.dataframe[column] = process(self.dataframe[column], stopwords)

@@ -1,8 +1,14 @@
-'''
+"""
 Copyright (c) 2012-2021 Tim Tomes
 Modifications Copyright (c) 2021 Jan William Johnsen
 2021-02-23: Updated to handle in-memory Pandas dataframe between modules and
 snapshots now copies the data stored on disk.
+2021-02-28: 1) Improved snapshot functions by using Subversion (SVN)
+repositories. This is more efficient than file copying (leads to data
+duplication), but keep the snapshot copy function for anyone without SVN.
+SVN was chosen because of the xdelta algorithm which compute differences
+between strings of bytes (and not strings of characters). 2) Added function to
+check for updates in the Github repository.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -16,9 +22,9 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 
-__author__ = 'Jan William Johnsen (@frozenbeer)'
+__author__ = "Jan William Johnsen (@frozenbeer)"
 
 from datetime import datetime
 from pathlib import Path
@@ -30,16 +36,20 @@ import shutil
 import sys
 import builtins
 import platform
+import importlib
+
+if importlib.util.find_spec('svn'):
+    import svn.remote
+    import svn.admin
 
 # import framework libs
 from internals.core import framework
 from internals.core.constants import BANNER
 
-__version__ = ''
+__version__ = ""
 
 # set the __version__ variable based on the VERSION file
-exec(open(os.path.join(Path(os.path.abspath(__file__)).parents[2],
-                       'VERSION')).read())
+exec(open(os.path.join(Path(os.path.abspath(__file__)).parents[2], "VERSION")).read())
 
 _print_lock = Lock()
 
@@ -73,32 +83,32 @@ builtins.print = spool_print
 
 class Computist(framework.Framework):
 
-    def __init__(self):
-        framework.Framework.__init__(self, 'base')
-        self._name = 'computist'
-        self._prompt_template = '{}[{}] > '
-        self._base_prompt = self._prompt_template.format('', self._name)
+    def __init__(self, check=True):
+        framework.Framework.__init__(self, "base")
+        self._name = "computist"
+        self._prompt_template = "{}[{}] > "
+        self._base_prompt = self._prompt_template.format("", self._name)
+        # set toggle flags
+        self._check = check
+        self._revisioning = True if sys.modules.get('svn.admin') else False
         # set path variables
         self.app_path = framework.Framework.app_path = sys.path[0]
-        self.core_path = framework.Framework.core_path = os.path\
-            .join(self.app_path, 'internals', 'core')
-        self.home_path = framework.Framework.home_path = os.path\
-            .join(os.path.expanduser('~'), '.computist')
-        self.mod_path = framework.Framework.mod_path = os.path\
-            .join(self.app_path, 'internals', 'modules')
-        self.data_path = framework.Framework.data_path = os.path\
-            .join(self.app_path, 'internals', 'data')
-        self.spaces_path = framework.Framework.spaces_path = os.path\
-            .join(self.home_path, 'workspaces')
-        self.dataframe = framework.Framework.dataframe
+        self.core_path = framework.Framework.core_path = os.path.join(self.app_path, "internals", "core")
+        self.home_path = framework.Framework.home_path = os.path.join(os.path.expanduser("~"), ".computist")
+        self.mod_path = framework.Framework.mod_path = os.path.join(self.app_path, "internals", "modules")
+        self.data_path = framework.Framework.data_path = os.path.join(self.app_path, "internals", "data")
+        self.spaces_path = framework.Framework.spaces_path = os.path.join(self.home_path, "workspaces")
         self.cache_path = framework.Framework.cache_path
+        self.repository_path = framework.Framework.repository_path
+        self.dataframe = framework.Framework.dataframe
 
-    def start(self, mode, workspace='default'):
+    def start(self, mode, workspace="default"):
         # initialize framework components
         self._mode = framework.Framework._mode = mode
         self._init_global_options()
         self._init_home()
         self._init_workspace(workspace)
+        self._check_version()
         if self._mode == Mode.CON:
             self._print_banner()
             self.cmdloop()
@@ -109,38 +119,52 @@ class Computist(framework.Framework):
 
     def _init_global_options(self):
         self.options = self._global_options
-        self.register_option('threads', 10, True, 'number of threads')
-        self.register_option('processes', 4, True, 'number of processes')
-        self.register_option('verbosity', 1, True, 'verbosity level ('
-                                                   '0 = minimal, 1 = verbose, '
-                                                   '2 = debug)')
+        self.register_option("threads", 10, True, "number of threads")
+        self.register_option("processes", 4, True, "number of processes")
+        self.register_option("verbosity", 1, True, "verbosity level (0 = minimal, 1 = verbose, 2 = debug)")
+        self.register_option("timeout", 10, True, "socket timeout (seconds)")
+        self.register_option("user-agent", f"Computist/v{__version__.split('.')[0]}", True, "user-agent string")
 
     def _init_home(self):
         # initialize home folder
         if not os.path.exists(self.home_path):
             os.makedirs(self.home_path)
 
+    def _check_version(self):
+        if self._check:
+            pattern = r"'(\d+\.\d+\.\d+[^']*)'"
+            remote = 0
+            local = 0
+            try:
+                remote = re.search(pattern, self.request('GET', 'https://raw.githubusercontent.com/Janjaya/computist/main/VERSION').text).group(1)
+                local = re.search(pattern, open('VERSION').read()).group(1)
+            except Exception as e:
+                self.error(f"Version check failed ({type(e).__name__}).")
+                # self.print_exception()
+            if remote != local:
+                self.alert("Your version of Computist does not match the latest release.")
+                self.alert("Please consider updating before further use.")
+                self.output(f"Remote version:  {remote}")
+                self.output(f"Local version:   {local}")
+        else:
+            self.alert('Version check disabled.')
+
     def _print_banner(self):
         banner = BANNER
         # banner_len = len(max(banner.split(os.linesep), key=len))
-        author = '{0}'.format(f"{framework.Colors.O}[{self._name} "
-                              f"v{__version__}, {__author__}]"
-                              f"{framework.Colors.N}")
+        author = "{0}".format(f"{framework.Colors.O}[{self._name} v{__version__}, {__author__}]{framework.Colors.N}")
         print(banner)
         print(author)
-        print('')
-        counts = [(len(self._loaded_category[x]), x)
-                  for x in self._loaded_category]
+        print("")
+        counts = [(len(self._loaded_category[x]), x) for x in self._loaded_category]
         if counts:
-            count_len = len(max([self.to_unicode_str(x[0])
-                                 for x in counts], key=len))
+            count_len = len(max([self.to_unicode_str(x[0]) for x in counts], key=len))
             for count in sorted(counts, reverse=True):
                 cnt = f"[{count[0]}]"
-                print(f"{framework.Colors.B}{cnt.ljust(count_len+2)} "
-                      f"{count[1].title()} modules{framework.Colors.N}")
+                print(f"{framework.Colors.B}{cnt.ljust(count_len+2)} {count[1].title()} modules{framework.Colors.N}")
         else:
-            self.alert('No modules enabled/installed.')
-        print('')
+            self.alert("No modules enabled/installed.")
+        print("")
 
     # ##=======================================================================
     # WORKSPACE METHODS
@@ -150,24 +174,24 @@ class Computist(framework.Framework):
         if not workspace:
             return
         path = os.path.join(self.spaces_path, workspace)
-        self.cache_path = os.path.join(self.spaces_path, workspace, 'cache')
+        self.cache_path = os.path.join(self.spaces_path, workspace, "cache")
         self.workspace = framework.Framework.workspace = path
         self.dataframe = framework.Framework.dataframe = None
         if not os.path.exists(path):
             os.makedirs(path)
             os.makedirs(self.cache_path)
             self._create_db()
+            self._create_repository()
         else:
             self._migrate_db()
         # set workspace prompt
-        self.prompt = self._prompt_template.format(
-            self._base_prompt[:-3], self.workspace.split(os.path.sep)[-1])
+        self.prompt = self._prompt_template.format(self._base_prompt[:-3], self.workspace.split(os.path.sep)[-1])
         # load workspace configuration
         self._load_config()
         # reload modules after config to populate options
         self._load_modules()
         # load workspace data
-        self._load_dataframe()
+        self.load_dataframe()
         return True
 
     def remove_workspace(self, workspace):
@@ -177,7 +201,7 @@ class Computist(framework.Framework):
         except OSError:
             return False
         if workspace == self.workspace.split(os.path.sep)[-1]:
-            self._init_workspace('default')
+            self._init_workspace("default")
         return True
 
     def _get_workspaces(self):
@@ -189,32 +213,39 @@ class Computist(framework.Framework):
         return workspaces
 
     def _get_snapshots(self):
-        snapshots = []
-        for f in os.listdir(self.workspace):
-            if re.search(r'^snapshot_\d{14}.db$', f):
-                snapshots.append(f[:-3])
-        return snapshots
+        snapshots = self.query("SELECT SNAPSHOT FROM snapshots")
+        return [snapshot[0] for snapshot in snapshots]
 
     def _db_version(self):
-        return self.query('PRAGMA user_version')[0][0]
+        return self.query("PRAGMA user_version")[0][0]
 
     def _create_db(self):
-        self.query('CREATE TABLE IF NOT EXISTS dashboard '
-                   '(module TEXT PRIMARY KEY, runs INT)')
-        self.query('CREATE TABLE IF NOT EXISTS snapshots '
-                   '(snapshot TEXT PRIMARY KEY, date TEXT, notes TEXT, '
-                   'module TEXT)')
-        self.query('PRAGMA user_version = 0')  # always latest DB version
+        self.query("CREATE TABLE IF NOT EXISTS dashboard (module TEXT PRIMARY KEY, runs INT)")
+        self.query("CREATE TABLE IF NOT EXISTS snapshots (snapshot TEXT PRIMARY KEY, date TEXT, revision TEXT, notes TEXT, module TEXT)")
+        self.query("PRAGMA user_version = 1")  # always latest DB version
 
     def _migrate_db(self):
         db_orig = self._db_version()
         if self._db_version() == 0:
-            # Make changes
-            pass
-            # self.query('PRAGMA user_version = 1')
+            tmp = self.get_random_str(20)
+            self.query(f"ALTER TABLE snapshots RENAME TO {tmp}")
+            self.query("CREATE TABLE snapshots (snapshot TEXT PRIMARY KEY, date TEXT, revision TEXT, notes TEXT, module TEXT)")
+            self.query(f"INSERT INTO snapshots (snapshot, date, notes, module) SELECT snapshot, date, notes, module FROM {tmp}")
+            self.query(f"DROP TABLE {tmp}")
+            self.query("PRAGMA user_version = 1")
         if db_orig != self._db_version():
-            self.alert("Database upgraded to version "
-                       f"{self._db_version(self)}.")
+            self.alert(f"Database upgraded to version {self._db_version(self)}.")
+
+    def _create_repository(self):
+        if self._revisioning:
+            self.repository_path = framework.Framework.repository_path = os.path.join(self.workspace, "repository")
+            # create SVN repository folder
+            os.makedirs(self.repository_path)
+            admin = svn.admin.Admin()
+            admin.create(self.repository_path)
+            # create local working copy of "remote" repository
+            repository = svn.remote.RemoteClient("file:///" + self.repository_path)
+            repository.checkout(self.workspace)
 
     # ##=======================================================================
     # MODULE METHODS
@@ -224,29 +255,23 @@ class Computist(framework.Framework):
         self._loaded_category = {}
         self._loaded_modules = framework.Framework._loaded_modules = {}
         # crawl the module directory and build the module tree
-        for dirpath, dirnames, filenames in os.walk(self.mod_path,
-                                                    followlinks=True):
+        for dirpath, dirnames, filenames in os.walk(self.mod_path, followlinks=True):
             # remove hidden files and directories
-            filenames = [f for f in filenames if not f[0] == '.']
-            dirnames[:] = [d for d in dirnames if not d[0] == '.']
+            filenames = [f for f in filenames if not f[0] == "."]
+            dirnames[:] = [d for d in dirnames if not d[0] == "."]
             if len(filenames) > 0:
-                for filename in [f for f in filenames if f.endswith('.py') and
-                                 not f.endswith('_mp.py')]:
+                for filename in [f for f in filenames if f.endswith(".py") and not f.endswith("_mp.py")]:
                     self._load_module(dirpath, filename)
 
     def _load_module(self, dirpath, filename):
-        mod_name = filename.split('.')[0]
-        if platform.system() == 'Windows':
-            mod_category = re.search('modules\\\\(.*)', dirpath).group(1)
-            mod_dispname = f'{os.path.sep}'.join(
-                re.split('modules', dirpath[2:])[-1][1:].split(
-                    f' {os.path.sep} ') + [mod_name])
+        mod_name = filename.split(".")[0]
+        if platform.system() == "Windows":
+            mod_category = re.search("modules\\\\(.*)", dirpath).group(1)
+            mod_dispname = f"{os.path.sep}".join(re.split("modules", dirpath[2:])[-1][1:].split(f" {os.path.sep} ") + [mod_name])
         else:
-            mod_dispname = f'{os.path.sep}'.join(
-                re.split(f'{os.path.sep}modules{os.path.sep}',
-                         dirpath)[-1].split(f' {os.path.sep} ') + [mod_name])
-            mod_category = re.search('modules([^/]*)', dirpath).group(1)
-        mod_loadname = mod_dispname.replace(f'{os.path.sep}', '_')
+            mod_dispname = f"{os.path.sep}".join(re.split(f"{os.path.sep}modules{os.path.sep}", dirpath)[-1].split(f" {os.path.sep} ") + [mod_name])
+            mod_category = re.search("modules([^/]*)", dirpath).group(1)
+        mod_loadname = mod_dispname.replace(f"{os.path.sep}", "_")
         mod_loadpath = os.path.join(dirpath, filename)
         mod_file = open(mod_loadpath)
         try:
@@ -261,15 +286,14 @@ class Computist(framework.Framework):
             return True
         except ImportError as e:
             # notify the user of missing dependencies
-            self.error(f"Module '{mod_dispname}' disabled. Dependency "
-                       f"required: '{self.to_unicode_str(e)[16:]}'")
+            self.error(f"Module '{mod_dispname}' disabled. Dependency required: '{self.to_unicode_str(e)[16:]}'")
         except Exception:
             # notify the user of errors
             self.print_exception()
             self.error(f"Module '{mod_dispname}' disabled.")
         # remove the module from the framework's loaded modules
         self._loaded_modules.pop(mod_dispname, None)
-        self._categorize_module('disabled', mod_dispname)
+        self._categorize_module("disabled", mod_dispname)
 
     def _categorize_module(self, category, module):
         if category not in self._loaded_category:
@@ -281,29 +305,28 @@ class Computist(framework.Framework):
     # ##=======================================================================
 
     def do_workspaces(self, params):
-        '''Manages workspaces'''
+        """Manages workspaces"""
         if not params:
             self.help_workspaces()
             return
         arg, params = self._parse_params(params)
-        if arg in self._parse_subcommands('workspaces'):
-            return getattr(self, '_do_workspaces_'+arg)(params)
+        if arg in self._parse_subcommands("workspaces"):
+            return getattr(self, "_do_workspaces_"+arg)(params)
         else:
             self.help_workspaces()
 
     def _do_workspaces_list(self, params):
-        '''Lists existing workspaces'''
+        """Lists existing workspaces"""
         rows = []
         for workspace in self._get_workspaces():
-            db_path = os.path.join(self.spaces_path, workspace, 'data.db')
-            modified = datetime.fromtimestamp(
-                os.path.getmtime(db_path)).strftime('%Y-%m-%d %H:%M:%S')
+            db_path = os.path.join(self.spaces_path, workspace, "data.db")
+            modified = datetime.fromtimestamp(os.path.getmtime(db_path)).strftime("%Y-%m-%d %H:%M:%S")
             rows.append((workspace, modified))
         rows.sort(key=lambda x: x[0])
-        self.table(rows, header=['Workspaces', 'Modified'])
+        self.table(rows, header=["Workspaces", "Modified"])
 
     def _do_workspaces_create(self, params):
-        '''Creates a new workspace'''
+        """Creates a new workspace"""
         if not params:
             self._help_workspaces_create()
             return
@@ -311,7 +334,7 @@ class Computist(framework.Framework):
             self.output(f"Unable to create '{params}' workspace.")
 
     def _do_workspaces_load(self, params):
-        '''Loads an existing workspace'''
+        """Loads an existing workspace"""
         if not params:
             self._help_workspaces_load()
             return
@@ -319,10 +342,10 @@ class Computist(framework.Framework):
             if not self._init_workspace(params):
                 self.output(f"Unable to initialize '{params}' workspace.")
         else:
-            self.output('Invalid workspace name.')
+            self.output("Invalid workspace name.")
 
     def _do_workspaces_remove(self, params):
-        '''Removes an existing workspace'''
+        """Removes an existing workspace"""
         if not params:
             self._help_workspaces_remove()
             return
@@ -330,72 +353,84 @@ class Computist(framework.Framework):
             self.output(f"Unable to remove '{params}' workspace.")
 
     def do_snapshots(self, params):
-        '''Manages workspace snapshots'''
+        """Manages workspace snapshots"""
         if not params:
             self.help_snapshots()
             return
         arg, params = self._parse_params(params)
-        if arg in self._parse_subcommands('snapshots'):
-            return getattr(self, '_do_snapshots_'+arg)(params)
+        if arg in self._parse_subcommands("snapshots"):
+            return getattr(self, "_do_snapshots_"+arg)(params)
         else:
             self.help_snapshots()
 
     def _do_snapshots_list(self, params):
-        '''Lists existing snapshots'''
+        """Lists existing snapshots"""
         snapshots = self._get_snapshots()
         if snapshots:
-            snapshots = self.query("SELECT SNAPSHOT, DATE, NOTES "
-                                   "FROM `snapshots`")
-            self.table([list(s) for s in snapshots],
-                       header=['Snapshots', 'Dates', 'Notes'])
+            snapshots = self.query("SELECT SNAPSHOT, DATE, NOTES FROM `snapshots`")
+            self.table([list(s) for s in snapshots], header=["Snapshots", "Dates", "Notes"])
         else:
-            self.output('This workspace has no snapshots.')
+            self.output("This workspace has no snapshots.")
 
     def _do_snapshots_take(self, params):
-        '''Takes a snapshot of the current environment'''
-        ts = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')
-        for ending in ['.db', '.json']:
-            snapshot = f"snapshot_{ts}" + ending
-            src = os.path.join(self.workspace, 'data' + ending)
-            dst = os.path.join(self.workspace, snapshot)
+        """Takes a snapshot of the current environment"""
+        ts = datetime.strftime(datetime.now(), "%Y%m%d%H%M%S")
+        if self._revisioning:
+            r = svn.local.LocalClient(self.workspace)
+            r.commit(f"snapshot_{ts}")
+            r.update()
+            cr = r.info()["commit_revision"]
+        else:
+            # Simply copying data without a SVN repository leads to data
+            # duplication and is less efficient for disk storage. Keep simple
+            # copying for users without SVN installed. Hopefully they use it
+            # for smaller datasets.
+            cr = 0
+            src = os.path.join(self.workspace, "data.json")
+            dst = os.path.join(self.workspace, f"snapshot_{ts}.json")
             if os.path.exists(src):
                 shutil.copyfile(src, dst)
-        self.insert_snapshot(snapshot=f"{ts}", notes=params, mute=True)
+        self.insert_snapshot(snapshot=f"{ts}", notes=params, revision=cr, mute=True)
         self.output(f"Snapshot created: snapshot_{ts}")
 
     def _do_snapshots_load(self, params):
-        '''Loads an existing snapshot'''
+        """Loads an existing snapshot"""
         if not params:
             self._help_snapshots_load()
             return
         if params in self._get_snapshots():
-            for ending in ['.db', '.json']:
-                src = os.path.join(self.workspace, params + ending)
-                dst = os.path.join(self.workspace, 'data' + ending)
+            cr = self.query(f"SELECT revision FROM snapshots WHERE snapshot LIKE '{params}'")[0][0]
+            if self._revisioning:
+                r = svn.local.LocalClient(self.workspace)
+                r.update(revision=cr)
+            else:
+                src = os.path.join(self.workspace, params + ".json")
+                dst = os.path.join(self.workspace, "data.json")
                 shutil.copyfile(src, dst)
-            self._load_dataframe()
+            self.load_dataframe()
             self.output(f"Snapshot loaded: {params}")
         else:
             self.error(f"No snapshot named '{params}'.")
 
     def _do_snapshots_remove(self, params):
-        '''Removes a snapshot'''
+        """Removes a snapshot"""
         if not params:
             self._help_snapshots_remove()
             return
         if params in self._get_snapshots():
-            for ending in ['.db', '.json']:
-                path = os.path.join(self.workspace, params + ending)
+            if self._revisioning:
+                self.alert("Cannot remove snapshot from repository.")
+            else:
+                path = os.path.join(self.workspace, params + ".json")
                 if os.path.exists(path):
                     os.remove(path)
-            self.query("DELETE FROM `snapshots` WHERE SNAPSHOT IS ?",
-                       (params,))
+                self.query("DELETE FROM snapshots WHERE SNAPSHOT IS ?", (params,))
             self.output(f"Snapshot removed: {params}")
         else:
             self.error(f"No snapshot named '{params}'.")
 
     def _do_modules_load(self, params):
-        '''Loads a module'''
+        """Loads a module"""
         # validate global options before loading the module
         try:
             self._validate_options()
@@ -410,7 +445,7 @@ class Computist(framework.Framework):
         # notify the user if none or multiple modules are found
         if len(modules) != 1:
             if not modules:
-                self.error('Invalid module name.')
+                self.error("Invalid module name.")
             else:
                 self.output(f"Multiple modules match '{params}'.")
                 self._list_modules(modules)
@@ -433,13 +468,13 @@ class Computist(framework.Framework):
             try:
                 y.cmdloop()
             except KeyboardInterrupt:
-                print('')
+                print("")
             # store new pointer to dataset
             self.dataframe = y.dataframe
             if y._exit == 1:
                 return True
             if y._reload == 1:
-                self.output('Reloading module...')
+                self.output("Reloading module...")
                 # reload the module in memory
                 is_loaded = self._load_module(
                     os.path.dirname(mod_loadpath),
@@ -451,8 +486,8 @@ class Computist(framework.Framework):
             break
 
     def _do_modules_reload(self, params):
-        '''Reloads installed modules'''
-        self.output('Reloading modules...')
+        """Reloads installed modules"""
+        self.output("Reloading modules...")
         self._load_modules()
 
     # ##=======================================================================
@@ -460,35 +495,33 @@ class Computist(framework.Framework):
     # ##=======================================================================
 
     def help_workspaces(self):
-        print(getattr(self, 'do_workspaces').__doc__)
+        print(getattr(self, "do_workspaces").__doc__)
         print(f"{os.linesep}Usage: workspaces "
               f"<{'|'.join(self._parse_subcommands('workspaces'))}> "
               f"[...]{os.linesep}")
 
     def _help_workspaces_create(self):
-        print(getattr(self, '_do_workspaces_create').__doc__)
+        print(getattr(self, "_do_workspaces_create").__doc__)
         print(f"{os.linesep}Usage: workspace create <name>{os.linesep}")
 
     def _help_workspaces_load(self):
-        print(getattr(self, '_do_workspaces_load').__doc__)
+        print(getattr(self, "_do_workspaces_load").__doc__)
         print(f"{os.linesep}Usage: workspace load <name>{os.linesep}")
 
     def _help_workspaces_remove(self):
-        print(getattr(self, '_do_workspaces_remove').__doc__)
+        print(getattr(self, "_do_workspaces_remove").__doc__)
         print(f"{os.linesep}Usage: workspace remove <name>{os.linesep}")
 
     def help_snapshots(self):
-        print(getattr(self, 'do_snapshots').__doc__)
-        print(f"{os.linesep}Usage: snapshots "
-              f"<{'|'.join(self._parse_subcommands('snapshots'))}> "
-              f"[...]{os.linesep}")
+        print(getattr(self, "do_snapshots").__doc__)
+        print(f"{os.linesep}Usage: snapshots <{'|'.join(self._parse_subcommands('snapshots'))}> [...]{os.linesep}")
 
     def _help_snapshots_load(self):
-        print(getattr(self, '_do_snapshots_load').__doc__)
+        print(getattr(self, "_do_snapshots_load").__doc__)
         print(f"{os.linesep}Usage: snapshots load <name>{os.linesep}")
 
     def _help_snapshots_remove(self):
-        print(getattr(self, '_do_snapshots_remove').__doc__)
+        print(getattr(self, "_do_snapshots_remove").__doc__)
         print(f"{os.linesep}Usage: snapshots remove <name>{os.linesep}")
 
     # ##=======================================================================
@@ -496,10 +529,10 @@ class Computist(framework.Framework):
     # ##=======================================================================
 
     def complete_workspaces(self, text, line, *ignored):
-        arg, params = self._parse_params(line.split(' ', 1)[1])
-        subs = self._parse_subcommands('workspaces')
+        arg, params = self._parse_params(line.split(" ", 1)[1])
+        subs = self._parse_subcommands("workspaces")
         if arg in subs:
-            return getattr(self, '_complete_workspaces_'+arg)(text, params)
+            return getattr(self, "_complete_workspaces_"+arg)(text, params)
         return [sub for sub in subs if sub.startswith(text)]
 
     def _complete_workspaces_list(self, text, *ignored):
@@ -511,10 +544,10 @@ class Computist(framework.Framework):
     _complete_workspaces_remove = _complete_workspaces_load
 
     def complete_snapshots(self, text, line, *ignored):
-        arg, params = self._parse_params(line.split(' ', 1)[1])
-        subs = self._parse_subcommands('snapshots')
+        arg, params = self._parse_params(line.split(" ", 1)[1])
+        subs = self._parse_subcommands("snapshots")
         if arg in subs:
-            return getattr(self, '_complete_snapshots_'+arg)(text, params)
+            return getattr(self, "_complete_snapshots_"+arg)(text, params)
         return [sub for sub in subs if sub.startswith(text)]
 
     def _complete_snapshots_list(self, text, *ignored):
@@ -534,11 +567,11 @@ class Computist(framework.Framework):
 
 
 class Mode(object):
-    '''Contains constants that represent the state of the interpreter.'''
+    """Contains constants that represent the state of the interpreter."""
     CON = 0  # console
     CLI = 1  # client
     WEB = 2  # web
     JOB = 3  # server
 
     def __init__(self):
-        raise NotImplementedError('This class should never be instantiated.')
+        raise NotImplementedError("This class should never be instantiated.")

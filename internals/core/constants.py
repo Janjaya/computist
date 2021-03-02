@@ -1,4 +1,4 @@
-'''
+"""
 Copyright (c) 2012-2021 Tim Tomes
 Modifications Copyright (c) 2021 Jan William Johnsen
 2021-02-23: Updated program name.
@@ -15,9 +15,9 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 
-BANNER = r'''
+BANNER = r"""
  _______________
 |       __      |                                     __  _      __
 |      |  |     |   _________  ____ ___  ____  __  __/ /_(_)____/ /_
@@ -27,16 +27,16 @@ BANNER = r'''
 | |______|      |                    /_/
 |_______________|
 
-'''
+"""
 
-BANNER_SMALL = r'''
+BANNER_SMALL = r"""
 computist
-'''
+"""
 
-BANNER_WEB = '''\
+BANNER_WEB = """
 *************************************************************************
  * Welcome to computist-web, the analytics and reporting engine for computist!
  * This is a web-based user interface. Open the URL below in your browser to begin.
  * computist-web includes the computist-API, which can be accessed via the `/api/` URL.
 *************************************************************************\
-'''
+"""

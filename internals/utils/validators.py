@@ -1,4 +1,4 @@
-'''
+"""
 Copyright (c) 2012-2021 Tim Tomes
 
 This program is free software: you can redistribute it and/or modify
@@ -13,7 +13,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 
 import re
 
@@ -43,7 +43,7 @@ class DomainValidator(BaseValidator):
         regex = (
             r"(?=^.{4,253}\.?$)(^((?!-)[a-zA-Z0-9-]{1,63}(?<!-)\.)+[a-zA-Z]{2,63}\.?$)"
         )
-        super(DomainValidator, self).__init__(regex, 'domain')
+        super(DomainValidator, self).__init__(regex, "domain")
 
 
 class UrlValidator(BaseValidator):
@@ -66,7 +66,7 @@ class UrlValidator(BaseValidator):
             # Path
             r"(?:/?|[/?]\S+)$"
         )
-        super(UrlValidator, self).__init__(regex, 'url')
+        super(UrlValidator, self).__init__(regex, "url")
 
 
 class EmailValidator(BaseValidator):
@@ -77,4 +77,4 @@ class EmailValidator(BaseValidator):
             r"(?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9]"
             r"(?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
         )
-        super(EmailValidator, self).__init__(regex, 'email')
+        super(EmailValidator, self).__init__(regex, "email")
