@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 
+docs/
 web/
 test/
 commands.res

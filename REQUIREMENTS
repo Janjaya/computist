@@ -1,4 +1,7 @@
 # framework
 pandas
-imblearn
-svn
+requests
+tqdm
+nltk
+readline
+enchant

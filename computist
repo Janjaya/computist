@@ -24,8 +24,8 @@ import re
 import sys
 import platform
 import warnings
-from internals.core import base
-from internals.core.framework import Colors
+from core import base
+from core.framework import Colors
 
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -39,16 +39,14 @@ def computist_ui(args):
     try:
         import readline
     except ImportError:
-        print(f"{Colors.R}[!] Module 'readline' not available. Tab complete "
-              f"disabled.{Colors.N}")
+        print(f"{Colors.R}[!] Module 'readline' not available. Tab complete disabled.{Colors.N}")
     else:
         import rlcompleter
         if platform.system() == "Darwin":  # "libedit" in readline.__doc__:
             readline.parse_and_bind("bind ^I rl_complete")
         else:
             readline.parse_and_bind("tab: complete")
-        readline.set_completer_delims(re.sub("[/-]", "",
-                                      readline.get_completer_delims()))
+        readline.set_completer_delims(re.sub("[/-]", "", readline.get_completer_delims()))
         # for possible future use to format command completion output
         # readline.set_completion_display_matches_hook(display_hook)
     # instantiate framework
